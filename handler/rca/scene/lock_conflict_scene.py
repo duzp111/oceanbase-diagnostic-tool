@@ -15,52 +15,27 @@
 @file: lock_conflict_scene.py
 @desc:
 """
-from common.command import get_observer_version
-from common.logger import logger
-from common.ob_connector import OBConnector
 from handler.rca.rca_exception import RCAInitException, RCANotNeedExecuteException
-from handler.rca.rca_scene.scene_base import scene_base, Result, RCA_ResultRecord
-from utils.shell_utils import SshHelper
-from utils.version_utils import compare_versions_greater
+from handler.rca.rca_handler import RcaScene, RCA_ResultRecord
+from common.tool import StringUtils
 
 
-class LockConflictScene(scene_base):
+class LockConflictScene(RcaScene):
     def __init__(self):
         super().__init__()
-        self.ob_connector = None
-        self.observer_nodes = None
-        self.ob_cluster = None
-        self.observer_version = None
-        self.default_node = None
 
-    def init(self, cluster, nodes, obproxy_nodes, env, result_path):
+    def init(self, context):
         try:
-            super().init(cluster, nodes, obproxy_nodes, env, result_path)
-            self.default_node = self.observer_nodes[0]
-
-            ssh = SshHelper(True, self.default_node.get("ip"),
-                            self.default_node.get("user"),
-                            self.default_node.get("password"),
-                            self.default_node.get("port"),
-                            self.default_node.get("private_key"),
-                            self.default_node)
-            self.observer_version = get_observer_version(True, ssh, self.default_node["home_path"])
-
-            self.ob_connector = OBConnector(ip=self.ob_cluster.get("db_host"),
-                                            port=self.ob_cluster.get("db_port"),
-                                            username=self.ob_cluster.get("tenant_sys").get("user"),
-                                            password=self.ob_cluster.get("tenant_sys").get("password"),
-                                            timeout=10000)
-
+            super().init(context)
+            if self.observer_version is None or len(self.observer_version.strip()) == 0 or self.observer_version == "":
+                raise Exception("observer version is None. Please check the NODES conf.")
         except Exception as e:
             raise RCAInitException("LockConflictScene RCAInitException: ", e)
 
     def execute(self):
-        if self.observer_version is None or len(self.observer_version) == 0:
-            raise Exception("observer version is None. Please check the NODES conf.")
-        if self.observer_version == "4.2.0.0" or compare_versions_greater(self.observer_version, "4.2.0.0"):
+        if self.observer_version == "4.2.0.0" or StringUtils.compare_versions_greater(self.observer_version, "4.2.0.0"):
             self.__execute_4_2()
-        elif compare_versions_greater("4.2.2.0", self.observer_version):
+        elif StringUtils.compare_versions_greater("4.2.2.0", self.observer_version):
             self.__execute_old()
         else:
             raise Exception("observer version is {0}. Not support".format(self.observer_version))
@@ -76,7 +51,8 @@ class LockConflictScene(scene_base):
             first_record.add_suggest("No block lock found. Not Need Execute")
             self.Result.records.append(first_record)
             raise RCANotNeedExecuteException("No block lock found.")
-        first_record.add_record("by select * from oceanbase.GV$OB_LOCKS where BLOCK=1; the len is {0}".format(len(data)))
+        first_record.add_record(
+            "by select * from oceanbase.GV$OB_LOCKS where BLOCK=1; the len is {0}".format(len(data)))
         for OB_LOCKS_data in data:
             trans_record = RCA_ResultRecord()
             first_record_records = first_record.records.copy()
@@ -128,7 +104,6 @@ class LockConflictScene(scene_base):
                 len(virtual_lock_wait_stat_datas)))
 
         for trans_lock_data in virtual_lock_wait_stat_datas:
-
             trans_id = trans_lock_data["block_session_id"]
             trans_record = RCA_ResultRecord()
             first_record_records = first_record.records.copy()
@@ -144,5 +119,14 @@ class LockConflictScene(scene_base):
 
         return
 
+    def get_scene_info(self):
+        return {"name": "lock_conflict",
+                "info_en": "root cause analysis of lock conflict",
+                "info_cn": "针对锁冲突的根因分析",
+                }
+
     def export_result(self):
         return self.Result.export()
+
+
+lock_conflict = LockConflictScene()
